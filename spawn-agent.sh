@@ -84,11 +84,16 @@ else
   fi
 fi
 
-# 3. Tmux Integration & Agent Agnosticism
-if [ -n "$TMUX" ]; then
-  echo "🪟 Spawning new tmux window running your agent..."
-  tmux new-window -n "$BRANCH_NAME" -c "$WORKTREE_PATH" "$AGENT_CMD"
+# 3. Tmux Session per Worktree
+if tmux has-session -t "$BRANCH_NAME" 2>/dev/null; then
+  echo "🪟 Session '$BRANCH_NAME' already exists, switching..."
 else
-  echo "⚠️ Not in a tmux session. Dropping into the directory instead."
-  cd "$WORKTREE_PATH" && eval "$AGENT_CMD"
+  echo "🪟 Creating tmux session '$BRANCH_NAME'..."
+  tmux new-session -d -s "$BRANCH_NAME" -c "$WORKTREE_PATH" "$AGENT_CMD"
+fi
+
+if [ -n "$TMUX" ]; then
+  tmux switch-client -t "$BRANCH_NAME"
+else
+  tmux attach-session -t "$BRANCH_NAME"
 fi
