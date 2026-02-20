@@ -1,6 +1,6 @@
 # spawn-subagent
 
-A shell script for spawning AI coding agents (or any command) in isolated git worktrees, each in their own tmux window.
+A shell script for spawning AI coding agents (or any command) in isolated git worktrees, each in their own tmux session.
 
 ## Usage
 
@@ -40,6 +40,21 @@ WORKTREE_PATH=$2
 
 cp "$REPO_ROOT/.env" "$WORKTREE_PATH/"
 ```
+
+## Navigating tmux sessions
+
+Each worktree gets its own tmux session named after the branch.
+
+| Action | Command |
+|---|---|
+| Switch to another session | `Ctrl-b (` / `)` (prev/next) |
+| Pick a session interactively | `Ctrl-b s` |
+| New window in current session | `Ctrl-b c` |
+| Split pane horizontally | `Ctrl-b %` |
+| Split pane vertically | `Ctrl-b "` |
+| Switch between panes | `Ctrl-b` + arrow keys |
+| Detach from session | `Ctrl-b d` |
+| Reattach from outside tmux | `tmux attach -t <branch-name>` |
 
 ## Requirements
 
