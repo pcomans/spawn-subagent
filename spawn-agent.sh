@@ -4,15 +4,15 @@
 set -e
 
 if [ -z "$1" ]; then
-  echo "Usage: spawn-agent <branch-name> [agent-command]"
+  echo "Usage: spawn-agent <branch-name>"
   echo "       spawn-agent remove <branch-name>"
   echo "       spawn-agent init"
   exit 1
 fi
 
-# Require tmux
-if ! command -v tmux &>/dev/null; then
-  echo "Error: tmux is required but not installed."
+# Require zellij
+if ! command -v zellij &>/dev/null; then
+  echo "Error: zellij is required but not installed."
   exit 1
 fi
 
@@ -61,15 +61,13 @@ if [ "$1" = "remove" ]; then
     echo "Commit or stash your changes, then try again."
     exit 1
   fi
-  tmux kill-session -t "$BRANCH_NAME" 2>/dev/null || true
+  zellij kill-session "$BRANCH_NAME" 2>/dev/null || true
   echo "✅ Removed worktree and session for '$BRANCH_NAME'"
   echo "ℹ️  Local branch '$BRANCH_NAME' was not deleted."
   exit 0
 fi
 
 BRANCH_NAME=$1
-# Default to opening a standard shell if no agent is specified
-AGENT_CMD=${2:-"$SHELL"}
 
 # Detect default base branch
 BASE_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || BASE_BRANCH="main"
@@ -102,16 +100,50 @@ else
   fi
 fi
 
-# Create or reattach tmux session
-if tmux has-session -t "$BRANCH_NAME" 2>/dev/null; then
-  echo "🪟 Session '$BRANCH_NAME' already exists, switching..."
+# Use repo-level layout if present, otherwise use built-in default
+if [ -f "$REPO_ROOT/.spawn-agent/layout.kdl" ]; then
+  LAYOUT_TEMPLATE="$REPO_ROOT/.spawn-agent/layout.kdl"
 else
-  echo "🪟 Creating tmux session '$BRANCH_NAME'..."
-  tmux new-session -d -s "$BRANCH_NAME" -c "$WORKTREE_PATH" "$AGENT_CMD"
+  LAYOUT_TEMPLATE=""
 fi
 
-if [ -n "$TMUX" ]; then
-  tmux switch-client -t "$BRANCH_NAME"
+# Generate a temp layout file with the correct cwd substituted in
+LAYOUT=$(mktemp /tmp/spawn-agent-XXXXXX.kdl)
+trap "rm -f $LAYOUT" EXIT
+
+if [ -n "$LAYOUT_TEMPLATE" ]; then
+  sed "s|{{cwd}}|$WORKTREE_PATH|g" "$LAYOUT_TEMPLATE" > "$LAYOUT"
 else
-  tmux attach-session -t "$BRANCH_NAME"
+  # Built-in default: shell on left, lazygit on right (if available)
+  if command -v lazygit &>/dev/null; then
+    cat > "$LAYOUT" <<EOF
+layout {
+    pane split_direction="vertical" {
+        pane cwd="$WORKTREE_PATH" size="70%"
+        pane command="lazygit" cwd="$WORKTREE_PATH" size="30%"
+    }
+    pane size=1 borderless=true {
+        plugin location="zellij:status-bar"
+    }
+}
+EOF
+  else
+    cat > "$LAYOUT" <<EOF
+layout {
+    pane cwd="$WORKTREE_PATH"
+    pane size=1 borderless=true {
+        plugin location="zellij:status-bar"
+    }
+}
+EOF
+  fi
+fi
+
+# Create or attach Zellij session
+if zellij list-sessions --no-formatting --short 2>/dev/null | grep -qx "$BRANCH_NAME"; then
+  echo "🪟 Session '$BRANCH_NAME' already exists."
+  echo "  Switch to it: Ctrl-o s  →  $BRANCH_NAME"
+else
+  echo "🪟 Creating Zellij session '$BRANCH_NAME'..."
+  zellij --session "$BRANCH_NAME" --layout "$LAYOUT"
 fi
