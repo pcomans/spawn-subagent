@@ -114,9 +114,7 @@ trap "rm -f $LAYOUT" EXIT
 if [ -n "$LAYOUT_TEMPLATE" ]; then
   sed "s|{{cwd}}|$WORKTREE_PATH|g" "$LAYOUT_TEMPLATE" > "$LAYOUT"
 else
-  # Built-in default: shell on left, lazygit on right (if available)
-  if command -v lazygit &>/dev/null; then
-    cat > "$LAYOUT" <<EOF
+  cat > "$LAYOUT" <<EOF
 layout {
     pane split_direction="vertical" {
         pane cwd="$WORKTREE_PATH" size="70%"
@@ -127,22 +125,12 @@ layout {
     }
 }
 EOF
-  else
-    cat > "$LAYOUT" <<EOF
-layout {
-    pane cwd="$WORKTREE_PATH"
-    pane size=1 borderless=true {
-        plugin location="zellij:status-bar"
-    }
-}
-EOF
-  fi
 fi
 
 # Create or attach Zellij session
 if zellij list-sessions --no-formatting --short 2>/dev/null | grep -qx "$BRANCH_NAME"; then
   echo "🪟 Session '$BRANCH_NAME' already exists."
-  echo "  Switch to it: Ctrl-o s  →  $BRANCH_NAME"
+  echo "  Switch to it: Ctrl-o w  →  $BRANCH_NAME"
 else
   echo "🪟 Creating Zellij session '$BRANCH_NAME'..."
   zellij --session "$BRANCH_NAME" --layout "$LAYOUT"
