@@ -2,6 +2,14 @@
 
 A shell script for spawning AI coding agents (or any command) in isolated git worktrees, each in their own tmux session.
 
+## Installation
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pcomans/spawn-subagent/main/install.sh | sh
+```
+
+Installs `spawn-agent` to `/usr/local/bin` (or `~/.local/bin` if that isn't writable).
+
 ## Usage
 
 ```bash
