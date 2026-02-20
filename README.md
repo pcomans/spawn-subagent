@@ -1,6 +1,6 @@
 # spawn-subagent
 
-A shell script for spawning AI coding agents in isolated git worktrees, each in their own Zellij session.
+A shell script for spawning AI coding agents in isolated git worktrees, each in their own Zellij tab.
 
 ## Installation
 
@@ -13,14 +13,24 @@ Installs `spawn-agent` to `/usr/local/bin` (or `~/.local/bin` if that isn't writ
 ## Usage
 
 ```bash
-spawn-agent <branch-name>
+spawn-agent <branch-name> [agent-command]
 ```
 
 - `branch-name` — created from the default branch if it doesn't exist, reattached if it does
+- `agent-command` — command to run in the main pane (default: `$SHELL`)
+
+Examples:
+
+```bash
+spawn-agent feature/my-feature          # opens a shell
+spawn-agent feature/my-feature claude   # opens Claude Code
+```
+
+Must be run from inside an existing Zellij session. Each worktree opens as a new tab named after the branch (`feature/my-feature` → tab `feature-my-feature`).
 
 Worktrees are stored under `~/.spawn-agent/<repo-name>/<branch-name>`.
 
-Each session opens with a shell on the left (70%) and lazygit on the right (30%).
+Each tab opens with the agent command on the left (70%) and lazygit on the right (30%).
 
 ## Removing a worktree
 
@@ -28,7 +38,7 @@ Each session opens with a shell on the left (70%) and lazygit on the right (30%)
 spawn-agent remove <branch-name>
 ```
 
-Runs `.spawn-agent/teardown.sh` (if present), removes the worktree, and kills the Zellij session. Fails with a clear error if the worktree has uncommitted changes. The local git branch is not deleted.
+Runs `.spawn-agent/teardown.sh` (if present), removes the worktree, and prints a reminder to close the tab. Fails with a clear error if the worktree has uncommitted changes. The local git branch is not deleted.
 
 ## Init
 
@@ -62,12 +72,15 @@ rm -f "$WORKTREE_PATH/.env"
 
 ## Custom layout
 
-Create `.spawn-agent/layout.kdl` to override the default Zellij layout. Use `{{cwd}}` as a placeholder for the worktree path:
+Create `.spawn-agent/layout.kdl` to override the default Zellij layout. Use `{{cwd}}` and `{{agent_cmd}}` as placeholders:
 
 ```kdl
 layout {
+    pane size=1 borderless=true {
+        plugin location="zellij:tab-bar"
+    }
     pane split_direction="vertical" {
-        pane cwd="{{cwd}}" size="70%"
+        pane command="{{agent_cmd}}" cwd="{{cwd}}" size="70%"
         pane command="lazygit" cwd="{{cwd}}" size="30%"
     }
     pane size=1 borderless=true {
@@ -76,20 +89,20 @@ layout {
 }
 ```
 
-## Navigating Zellij sessions
+## Navigating tabs
 
-Each worktree gets its own Zellij session named after the branch.
+Each worktree opens as a tab in your current Zellij session.
 
-| Action | Command |
+| Action | Keybinding |
 |---|---|
-| Open session manager | `Ctrl-o w` |
-| Detach from session | `Ctrl-o d` |
+| Next tab | `Ctrl-t n` |
+| Previous tab | `Ctrl-t p` |
+| Rename tab | `Ctrl-t r` |
+| Close tab | `Ctrl-t x` |
+| Switch between panes | `Ctrl-p` + arrow keys |
 | New pane | `Ctrl-p n` |
 | Split pane right | `Ctrl-p d` |
 | Split pane down | `Ctrl-p D` |
-| Switch between panes | `Ctrl-p` + arrow keys |
-| List sessions | `zellij list-sessions` |
-| Attach to session | `zellij attach <branch-name>` |
 
 ## Zellij setup
 
