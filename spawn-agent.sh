@@ -111,7 +111,8 @@ else
 fi
 
 # Generate a temp layout file with the correct cwd substituted in
-LAYOUT=$(mktemp /tmp/spawn-agent-XXXXXX.kdl)
+mkdir -p "$HOME/.spawn-agent/tmp"
+LAYOUT=$(mktemp "$HOME/.spawn-agent/tmp/layout-XXXXXX.kdl")
 trap "rm -f $LAYOUT" EXIT
 
 if [ -n "$LAYOUT_TEMPLATE" ]; then
@@ -133,6 +134,11 @@ layout {
 EOF
 fi
 
-# Open as a new tab in the current session
-echo "🪟 Opening tab '$SESSION_NAME'..."
-zellij action new-tab --layout "$LAYOUT" --name "$SESSION_NAME"
+# Inside Zellij: open as a new tab. Outside: start a new session.
+if [ -n "$ZELLIJ" ]; then
+  echo "🪟 Opening tab '$SESSION_NAME'..."
+  zellij action new-tab --layout "$LAYOUT" --name "$SESSION_NAME"
+else
+  echo "🪟 Creating Zellij session '$SESSION_NAME'..."
+  zellij --session "$SESSION_NAME" --layout "$LAYOUT"
+fi

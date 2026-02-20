@@ -108,6 +108,29 @@ check "non-git dir exits non-zero" "1" "$code"
 contains "non-git dir prints error" "not inside a git repository" "$out"
 rm -rf "$NONGIT"
 
+# ── Launch mode selection ─────────────────────────────────────────────────────
+echo "Launch mode:"
+
+# Use a mock zellij that records args instead of running
+MOCK_BIN=$(mktemp -d)
+cat > "$MOCK_BIN/zellij" <<'MOCK'
+#!/bin/bash
+echo "zellij $*"
+MOCK
+chmod +x "$MOCK_BIN/zellij"
+
+# Inside Zellij: should call "zellij action new-tab"
+out=$(ZELLIJ=1 ZELLIJ_SESSION_NAME=fake PATH="$MOCK_BIN:$PATH" "$SCRIPT" some-branch 2>&1)
+contains "inside zellij: prints tab message" "Opening tab" "$out"
+contains "inside zellij: calls action new-tab" "action new-tab" "$out"
+
+# Outside Zellij: should call "zellij --session"
+out=$(ZELLIJ="" ZELLIJ_SESSION_NAME="" PATH="$MOCK_BIN:$PATH" "$SCRIPT" some-branch 2>&1)
+contains "outside zellij: prints session message" "Creating Zellij session" "$out"
+contains "outside zellij: calls --session" "zellij --session" "$out"
+
+rm -rf "$MOCK_BIN"
+
 # ── Integration: layout loading via background session ────────────────────────
 echo "Integration (requires Zellij):"
 
@@ -117,7 +140,7 @@ else
   TEST_SESSION="spawn-agent-test-$$"
   zellij attach --create-background "$TEST_SESSION" 2>/dev/null
 
-  LAYOUT=$(mktemp /tmp/spawn-agent-XXXXXX.kdl)
+  LAYOUT=$(mktemp "${TMPDIR:-/tmp}/spawn-agent-XXXXXX.kdl")
   cat > "$LAYOUT" <<EOF2
 layout {
     pane size=1 borderless=true {
