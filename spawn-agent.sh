@@ -110,16 +110,14 @@ else
   LAYOUT_TEMPLATE=""
 fi
 
-# Generate a temp layout file with the correct cwd substituted in
+# Generate temp layout files
 mkdir -p "$HOME/.spawn-agent/tmp"
 LAYOUT=$(mktemp "$HOME/.spawn-agent/tmp/layout-XXXXXX.kdl")
 trap "rm -f $LAYOUT" EXIT
 
-if [ -n "$LAYOUT_TEMPLATE" ]; then
-  sed -e "s|{{cwd}}|$WORKTREE_PATH|g" -e "s|{{agent_cmd}}|$AGENT_CMD|g" "$LAYOUT_TEMPLATE" > "$LAYOUT"
-else
-  cat > "$LAYOUT" <<EOF
-layout {
+# Pane content shared by both layouts
+pane_content() {
+  cat <<EOF
     pane size=1 borderless=true {
         plugin location="zellij:tab-bar"
     }
@@ -130,15 +128,29 @@ layout {
     pane size=1 borderless=true {
         plugin location="zellij:status-bar"
     }
-}
 EOF
+}
+
+if [ -n "$LAYOUT_TEMPLATE" ]; then
+  sed -e "s|{{cwd}}|$WORKTREE_PATH|g" -e "s|{{agent_cmd}}|$AGENT_CMD|g" "$LAYOUT_TEMPLATE" > "$LAYOUT"
+elif [ -n "$ZELLIJ" ]; then
+  # Tab layout: no tab wrapper (new-tab provides the tab context)
+  { echo "layout {"; pane_content; echo "}"; } > "$LAYOUT"
+else
+  # Session layout: wrap in a named tab
+  { echo "layout {"; echo "    tab name=\"$SESSION_NAME\" {"; pane_content; echo "    }"; echo "}"; } > "$LAYOUT"
 fi
 
-# Inside Zellij: open as a new tab. Outside: start a new session.
+# Inside Zellij: open as a new tab in the current session.
+# Outside Zellij: create or attach to a repo-named session, open worktree as a tab.
 if [ -n "$ZELLIJ" ]; then
   echo "🪟 Opening tab '$SESSION_NAME'..."
   zellij action new-tab --layout "$LAYOUT" --name "$SESSION_NAME"
+elif zellij list-sessions --no-formatting --short 2>/dev/null | grep -qxF "$REPO_NAME"; then
+  echo "🪟 Attaching to session '$REPO_NAME', opening tab '$SESSION_NAME'..."
+  ZELLIJ_SESSION_NAME="$REPO_NAME" zellij action new-tab --layout "$LAYOUT" --name "$SESSION_NAME"
+  zellij attach "$REPO_NAME"
 else
-  echo "🪟 Creating Zellij session '$SESSION_NAME'..."
-  zellij --new-session-with-layout "$LAYOUT" --session "$SESSION_NAME"
+  echo "🪟 Creating Zellij session '$REPO_NAME'..."
+  zellij --new-session-with-layout "$LAYOUT" --session "$REPO_NAME"
 fi

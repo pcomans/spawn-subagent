@@ -111,25 +111,46 @@ rm -rf "$NONGIT"
 # ── Launch mode selection ─────────────────────────────────────────────────────
 echo "Launch mode:"
 
-# Use a mock zellij that records args instead of running
+# Mock zellij: records args, and simulates list-sessions returning nothing by default
 MOCK_BIN=$(mktemp -d)
 cat > "$MOCK_BIN/zellij" <<'MOCK'
 #!/bin/bash
 echo "zellij $*"
+for arg in "$@"; do
+  if [ -f "$arg" ] && [[ "$arg" == *.kdl ]]; then cat "$arg"; fi
+done
 MOCK
 chmod +x "$MOCK_BIN/zellij"
 
-# Inside Zellij: should call "zellij action new-tab"
+# Inside Zellij: new-tab, no tab wrapper in layout
 out=$(ZELLIJ=1 ZELLIJ_SESSION_NAME=fake PATH="$MOCK_BIN:$PATH" "$SCRIPT" some-branch 2>&1)
-contains "inside zellij: prints tab message" "Opening tab" "$out"
-contains "inside zellij: calls action new-tab" "action new-tab" "$out"
+contains "inside zellij: prints tab message"        "Opening tab"       "$out"
+contains "inside zellij: calls action new-tab"      "action new-tab"    "$out"
+excludes "inside zellij: layout has no tab wrapper" 'tab name='         "$out"
 
-# Outside Zellij: should call "zellij --session"
+# Outside Zellij, no existing repo session: create session named after repo
 out=$(ZELLIJ="" ZELLIJ_SESSION_NAME="" PATH="$MOCK_BIN:$PATH" "$SCRIPT" some-branch 2>&1)
-contains "outside zellij: prints session message" "Creating Zellij session" "$out"
-contains "outside zellij: calls --new-session-with-layout" "zellij --new-session-with-layout" "$out"
+contains "outside zellij (new): prints session message"      "Creating Zellij session"          "$out"
+contains "outside zellij (new): session named after repo"    "$(basename "$(git rev-parse --show-toplevel)")" "$out"
+contains "outside zellij (new): calls --new-session-with-layout" "zellij --new-session-with-layout" "$out"
+contains "outside zellij (new): layout has tab wrapper"      'tab name="some-branch"'           "$out"
 
-rm -rf "$MOCK_BIN"
+# Outside Zellij, repo session already exists: add tab and attach
+MOCK_BIN2=$(mktemp -d)
+REPO_NAME="$(basename "$(git rev-parse --show-toplevel)")"
+cat > "$MOCK_BIN2/zellij" <<MOCK2
+#!/bin/bash
+if [ "\$1" = "list-sessions" ]; then echo "$REPO_NAME"; fi
+echo "zellij \$*"
+MOCK2
+chmod +x "$MOCK_BIN2/zellij"
+
+out=$(ZELLIJ="" ZELLIJ_SESSION_NAME="" PATH="$MOCK_BIN2:$PATH" "$SCRIPT" some-branch 2>&1)
+contains "outside zellij (existing): attaches to repo session" "Attaching to session '$REPO_NAME'" "$out"
+contains "outside zellij (existing): calls action new-tab"     "action new-tab"                   "$out"
+contains "outside zellij (existing): calls attach"             "zellij attach $REPO_NAME"         "$out"
+
+rm -rf "$MOCK_BIN" "$MOCK_BIN2"
 
 # ── Integration: layout loading via background session ────────────────────────
 echo "Integration (requires Zellij):"
