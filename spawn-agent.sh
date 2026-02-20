@@ -140,5 +140,5 @@ if [ -n "$ZELLIJ" ]; then
   zellij action new-tab --layout "$LAYOUT" --name "$SESSION_NAME"
 else
   echo "🪟 Creating Zellij session '$SESSION_NAME'..."
-  zellij --session "$SESSION_NAME" --layout "$LAYOUT"
+  zellij --new-session-with-layout "$LAYOUT" --session "$SESSION_NAME"
 fi

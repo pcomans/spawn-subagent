@@ -127,7 +127,7 @@ contains "inside zellij: calls action new-tab" "action new-tab" "$out"
 # Outside Zellij: should call "zellij --session"
 out=$(ZELLIJ="" ZELLIJ_SESSION_NAME="" PATH="$MOCK_BIN:$PATH" "$SCRIPT" some-branch 2>&1)
 contains "outside zellij: prints session message" "Creating Zellij session" "$out"
-contains "outside zellij: calls --session" "zellij --session" "$out"
+contains "outside zellij: calls --new-session-with-layout" "zellij --new-session-with-layout" "$out"
 
 rm -rf "$MOCK_BIN"
 
