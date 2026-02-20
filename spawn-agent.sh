@@ -4,13 +4,24 @@
 set -e
 
 if [ -z "$1" ]; then
-  echo "Usage: ./spawn-agent.sh <branch-name> [agent-command]"
-  echo "       ./spawn-agent.sh remove <branch-name>"
+  echo "Usage: spawn-agent <branch-name> [agent-command]"
+  echo "       spawn-agent remove <branch-name>"
+  echo "       spawn-agent init"
   exit 1
 fi
 
-# Get repository details
-REPO_ROOT=$(git rev-parse --show-toplevel)
+# Require tmux
+if ! command -v tmux &>/dev/null; then
+  echo "Error: tmux is required but not installed."
+  exit 1
+fi
+
+# Require git repo
+if ! REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null); then
+  echo "Error: not inside a git repository."
+  exit 1
+fi
+
 REPO_NAME=$(basename "$REPO_ROOT")
 
 # Handle init subcommand
@@ -36,7 +47,7 @@ fi
 # Handle remove subcommand
 if [ "$1" = "remove" ]; then
   if [ -z "$2" ]; then
-    echo "Usage: ./spawn-agent.sh remove <branch-name>"
+    echo "Usage: spawn-agent remove <branch-name>"
     exit 1
   fi
   BRANCH_NAME=$2
@@ -45,8 +56,14 @@ if [ "$1" = "remove" ]; then
     echo "⚙️  Running .spawn-agent/teardown.sh..."
     bash "$REPO_ROOT/.spawn-agent/teardown.sh" "$REPO_ROOT" "$WORKTREE_PATH"
   fi
-  git worktree remove "$WORKTREE_PATH"
-  echo "✅ Removed worktree for '$BRANCH_NAME'"
+  if ! git worktree remove "$WORKTREE_PATH" 2>/dev/null; then
+    echo "Error: could not remove worktree. It may have uncommitted changes."
+    echo "Commit or stash your changes, then try again."
+    exit 1
+  fi
+  tmux kill-session -t "$BRANCH_NAME" 2>/dev/null || true
+  echo "✅ Removed worktree and session for '$BRANCH_NAME'"
+  echo "ℹ️  Local branch '$BRANCH_NAME' was not deleted."
   exit 0
 fi
 
@@ -54,29 +71,30 @@ BRANCH_NAME=$1
 # Default to opening a standard shell if no agent is specified
 AGENT_CMD=${2:-"$SHELL"}
 
+# Detect default base branch
+BASE_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || BASE_BRANCH="main"
+
 # Define the new centralized worktree path
 BASE_WORKTREE_DIR="$HOME/.spawn-agent/$REPO_NAME"
 WORKTREE_PATH="$BASE_WORKTREE_DIR/$BRANCH_NAME"
 
 # Check if the worktree directory already exists
 if [ -d "$WORKTREE_PATH" ]; then
-  echo "⚠️  Worktree path $WORKTREE_PATH already exists!"
-  echo "Skipping git setup and launching agent..."
+  echo "⚠️  Worktree already exists, reattaching..."
 else
-  # Ensure the base storage directory exists
   mkdir -p "$BASE_WORKTREE_DIR"
-  echo "🚀 Creating workspace for $BRANCH_NAME at $WORKTREE_PATH..."
+  echo "🚀 Creating workspace for '$BRANCH_NAME' at $WORKTREE_PATH..."
 
-  # 1. True Parallel Execution: Handle existing vs new branches
+  # Handle existing vs new branches
   if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
     echo "🌿 Branch '$BRANCH_NAME' exists. Attaching worktree..."
     git worktree add "$WORKTREE_PATH" "$BRANCH_NAME"
   else
-    echo "🌱 Creating new branch '$BRANCH_NAME'..."
-    git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" main
+    echo "🌱 Creating new branch '$BRANCH_NAME' from '$BASE_BRANCH'..."
+    git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" "$BASE_BRANCH"
   fi
 
-  # 2. Automated Environment Setup
+  # Run per-repo setup if present
   if [ -f "$REPO_ROOT/.spawn-agent/setup.sh" ]; then
     echo "⚙️  Running .spawn-agent/setup.sh..."
     bash "$REPO_ROOT/.spawn-agent/setup.sh" "$REPO_ROOT" "$WORKTREE_PATH"
@@ -84,7 +102,7 @@ else
   fi
 fi
 
-# 3. Tmux Session per Worktree
+# Create or reattach tmux session
 if tmux has-session -t "$BRANCH_NAME" 2>/dev/null; then
   echo "🪟 Session '$BRANCH_NAME' already exists, switching..."
 else
