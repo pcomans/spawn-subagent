@@ -64,9 +64,28 @@ The default layout (`.spawn-agent/layout.kdl` override supported) must:
 
 ## Key Zellij behaviors discovered
 
-- `zellij --session NAME --layout FILE` inside a session: adds layout as new tab to NAME (not create)
-- `zellij --new-session-with-layout FILE`: creates nested session (wrong for our use case)
-- `zellij action new-tab --layout FILE --name NAME`: correct way to open a tab in current session
-- `ZELLIJ_SESSION_NAME=NAME zellij action ...`: targets a specific session (works from outside it)
-- `zellij action dump-layout`: inspects current session layout state (useful for testing)
-- `new-tab --layout` does NOT inherit `default_tab_template`; tab-bar/status-bar must be explicit
+### Session creation
+- `zellij --session NAME --layout FILE` — ALWAYS tries to add layout as a new tab to session NAME, whether inside Zellij or not. Fails with "Session not found" if NAME doesn't exist. Never creates a new session.
+- `zellij --new-session-with-layout FILE --session NAME` — ALWAYS creates a new named session. Use this when outside Zellij to create a session with a specific name and layout.
+- `zellij --new-session-with-layout FILE` inside an existing session — creates a nested Zellij (wrong).
+- `session { name "..." }` block in layout KDL — not supported in Zellij 0.43.1.
+
+### Tab creation (inside Zellij)
+- `zellij action new-tab --layout FILE --name NAME` — correct way to open a new tab in the current session.
+- `new-tab --layout` does NOT inherit `default_tab_template`; tab-bar and status-bar must be included explicitly in the layout file.
+- A `tab { }` wrapper in the layout file passed to `new-tab` causes session-level replacement (breaks existing tabs and chrome). Layout for `new-tab` must contain only panes at the top level.
+
+### Testing without a live terminal
+- `zellij attach --create-background SESSION` — creates a headless background session (no terminal needed).
+- `ZELLIJ_SESSION_NAME=SESSION zellij action ...` — runs actions against a specific session from outside it.
+- `zellij action dump-layout` — inspect the full layout state of a session (use for test assertions).
+- Mock zellij with a fake binary on PATH to test which command the script invokes without blocking.
+
+### Session name constraints
+- Session names must be `[a-zA-Z0-9_-]` only — no spaces, no slashes.
+- The "less than 0 characters" error from Zellij is a display bug masking a name validation failure.
+- Sanitize branch names by replacing `/` with `-`.
+
+### $ZELLIJ environment variable
+- Set by Zellij when running inside a session. Use `[ -n "$ZELLIJ" ]` to detect this.
+- Unset it (`ZELLIJ=""`) when testing the outside-Zellij code path.
