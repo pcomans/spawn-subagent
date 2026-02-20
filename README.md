@@ -1,6 +1,6 @@
 # spawn-subagent
 
-A shell script for spawning AI coding agents (or any command) in isolated git worktrees, each in their own tmux session.
+A shell script for spawning AI coding agents in isolated git worktrees, each in their own Zellij session.
 
 ## Installation
 
@@ -13,13 +13,14 @@ Installs `spawn-agent` to `/usr/local/bin` (or `~/.local/bin` if that isn't writ
 ## Usage
 
 ```bash
-spawn-agent <branch-name> [agent-command]
+spawn-agent <branch-name>
 ```
 
 - `branch-name` — created from the default branch if it doesn't exist, reattached if it does
-- `agent-command` — defaults to `$SHELL`; pass `claude`, `aider`, etc.
 
 Worktrees are stored under `~/.spawn-agent/<repo-name>/<branch-name>`.
+
+Each session opens with a shell on the left (70%) and lazygit on the right (30%).
 
 ## Removing a worktree
 
@@ -27,7 +28,7 @@ Worktrees are stored under `~/.spawn-agent/<repo-name>/<branch-name>`.
 spawn-agent remove <branch-name>
 ```
 
-Runs `.spawn-agent/teardown.sh` (if present), removes the worktree, and kills the tmux session. Fails with a clear error if the worktree has uncommitted changes. The local git branch is not deleted.
+Runs `.spawn-agent/teardown.sh` (if present), removes the worktree, and kills the Zellij session. Fails with a clear error if the worktree has uncommitted changes. The local git branch is not deleted.
 
 ## Init
 
@@ -59,23 +60,49 @@ WORKTREE_PATH=$2
 rm -f "$WORKTREE_PATH/.env"
 ```
 
-## Navigating tmux sessions
+## Custom layout
 
-Each worktree gets its own tmux session named after the branch.
+Create `.spawn-agent/layout.kdl` to override the default Zellij layout. Use `{{cwd}}` as a placeholder for the worktree path:
+
+```kdl
+layout {
+    pane split_direction="vertical" {
+        pane cwd="{{cwd}}" size="70%"
+        pane command="lazygit" cwd="{{cwd}}" size="30%"
+    }
+    pane size=1 borderless=true {
+        plugin location="zellij:status-bar"
+    }
+}
+```
+
+## Navigating Zellij sessions
+
+Each worktree gets its own Zellij session named after the branch.
 
 | Action | Command |
 |---|---|
-| Switch to another session | `Ctrl-b (` / `)` (prev/next) |
-| Pick a session interactively | `Ctrl-b s` |
-| List all sessions | `tmux list-sessions` |
-| New window in current session | `Ctrl-b c` |
-| Split pane horizontally | `Ctrl-b %` |
-| Split pane vertically | `Ctrl-b "` |
-| Switch between panes | `Ctrl-b` + arrow keys |
-| Detach from session | `Ctrl-b d` |
-| Reattach from outside tmux | `tmux attach -t <branch-name>` |
+| Open session manager | `Ctrl-o w` |
+| Detach from session | `Ctrl-o d` |
+| New pane | `Ctrl-p n` |
+| Split pane right | `Ctrl-p d` |
+| Split pane down | `Ctrl-p D` |
+| Switch between panes | `Ctrl-p` + arrow keys |
+| List sessions | `zellij list-sessions` |
+| Attach to session | `zellij attach <branch-name>` |
+
+## Zellij setup
+
+### Copy/paste (macOS)
+
+Zellij requires an explicit copy command. Add this to your `~/.config/zellij/config.kdl`:
+
+```kdl
+copy_command "pbcopy"
+```
 
 ## Requirements
 
 - git
-- tmux
+- [Zellij](https://zellij.dev)
+- [lazygit](https://github.com/jesseduffield/lazygit)
