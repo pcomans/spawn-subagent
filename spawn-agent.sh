@@ -110,8 +110,10 @@ else
   LAYOUT_TEMPLATE=""
 fi
 
-# Generate layout file at a fixed path in the worktree directory
-LAYOUT="$WORKTREE_PATH/.zellij-layout.kdl"
+# Generate a temp layout file with the correct cwd substituted in
+mkdir -p "$HOME/.spawn-agent/tmp"
+LAYOUT=$(mktemp "$HOME/.spawn-agent/tmp/layout-XXXXXX.kdl")
+trap "rm -f $LAYOUT" EXIT
 
 if [ -n "$LAYOUT_TEMPLATE" ]; then
   sed -e "s|{{cwd}}|$WORKTREE_PATH|g" -e "s|{{agent_cmd}}|$AGENT_CMD|g" "$LAYOUT_TEMPLATE" > "$LAYOUT"
