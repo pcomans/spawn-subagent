@@ -4,7 +4,7 @@
 set -e
 
 if [ -z "$1" ]; then
-  echo "Usage: spawn-agent <branch-name>"
+  echo "Usage: spawn-agent <branch-name> [agent-command]"
   echo "       spawn-agent remove <branch-name>"
   echo "       spawn-agent init"
   exit 1
@@ -51,6 +51,7 @@ if [ "$1" = "remove" ]; then
     exit 1
   fi
   BRANCH_NAME=$2
+  SESSION_NAME="${BRANCH_NAME//\//-}"
   WORKTREE_PATH="$HOME/.spawn-agent/$REPO_NAME/$BRANCH_NAME"
   if [ -f "$REPO_ROOT/.spawn-agent/teardown.sh" ]; then
     echo "⚙️  Running .spawn-agent/teardown.sh..."
@@ -61,13 +62,15 @@ if [ "$1" = "remove" ]; then
     echo "Commit or stash your changes, then try again."
     exit 1
   fi
-  zellij kill-session "$BRANCH_NAME" 2>/dev/null || true
-  echo "✅ Removed worktree and session for '$BRANCH_NAME'"
+  echo "✅ Removed worktree for '$BRANCH_NAME'"
+  echo "ℹ️  Close the '$SESSION_NAME' tab manually if still open."
   echo "ℹ️  Local branch '$BRANCH_NAME' was not deleted."
   exit 0
 fi
 
 BRANCH_NAME=$1
+AGENT_CMD=${2:-"$SHELL"}
+SESSION_NAME="${BRANCH_NAME//\//-}"
 
 # Detect default base branch
 BASE_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || BASE_BRANCH="main"
@@ -112,12 +115,15 @@ LAYOUT=$(mktemp /tmp/spawn-agent-XXXXXX.kdl)
 trap "rm -f $LAYOUT" EXIT
 
 if [ -n "$LAYOUT_TEMPLATE" ]; then
-  sed "s|{{cwd}}|$WORKTREE_PATH|g" "$LAYOUT_TEMPLATE" > "$LAYOUT"
+  sed -e "s|{{cwd}}|$WORKTREE_PATH|g" -e "s|{{agent_cmd}}|$AGENT_CMD|g" "$LAYOUT_TEMPLATE" > "$LAYOUT"
 else
   cat > "$LAYOUT" <<EOF
 layout {
+    pane size=1 borderless=true {
+        plugin location="zellij:tab-bar"
+    }
     pane split_direction="vertical" {
-        pane cwd="$WORKTREE_PATH" size="70%"
+        pane command="$AGENT_CMD" cwd="$WORKTREE_PATH" size="70%"
         pane command="lazygit" cwd="$WORKTREE_PATH" size="30%"
     }
     pane size=1 borderless=true {
@@ -127,11 +133,6 @@ layout {
 EOF
 fi
 
-# Create or attach Zellij session
-if zellij list-sessions --no-formatting --short 2>/dev/null | grep -qx "$BRANCH_NAME"; then
-  echo "🪟 Session '$BRANCH_NAME' already exists."
-  echo "  Switch to it: Ctrl-o w  →  $BRANCH_NAME"
-else
-  echo "🪟 Creating Zellij session '$BRANCH_NAME'..."
-  zellij --session "$BRANCH_NAME" --layout "$LAYOUT"
-fi
+# Open as a new tab in the current session
+echo "🪟 Opening tab '$SESSION_NAME'..."
+zellij action new-tab --layout "$LAYOUT" --name "$SESSION_NAME"
