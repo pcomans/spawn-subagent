@@ -21,6 +21,14 @@ Worktrees are stored under `~/.spawn-agent/<repo-name>/<branch-name>`.
 
 Runs `.spawn-agent/teardown.sh` (if present) before removing the worktree. The teardown script receives the same two arguments as setup (`$REPO_ROOT`, `$WORKTREE_PATH`).
 
+## Init
+
+```bash
+./spawn-agent.sh init
+```
+
+Creates `.spawn-agent/setup.sh` and `.spawn-agent/teardown.sh` in the current repo if they don't already exist.
+
 ## Per-repo setup
 
 Create `.spawn-agent/setup.sh` in your repo to run custom setup when a worktree is created (copy `.env`, install deps, etc.). It receives two arguments:

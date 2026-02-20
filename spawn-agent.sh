@@ -13,6 +13,26 @@ fi
 REPO_ROOT=$(git rev-parse --show-toplevel)
 REPO_NAME=$(basename "$REPO_ROOT")
 
+# Handle init subcommand
+if [ "$1" = "init" ]; then
+  mkdir -p "$REPO_ROOT/.spawn-agent"
+  for script in setup teardown; do
+    SCRIPT_PATH="$REPO_ROOT/.spawn-agent/$script.sh"
+    if [ -f "$SCRIPT_PATH" ]; then
+      echo "⚠️  .spawn-agent/$script.sh already exists, skipping"
+    else
+      cat > "$SCRIPT_PATH" <<'EOF'
+#!/bin/bash
+REPO_ROOT=$1
+WORKTREE_PATH=$2
+EOF
+      chmod +x "$SCRIPT_PATH"
+      echo "✅ Created .spawn-agent/$script.sh"
+    fi
+  done
+  exit 0
+fi
+
 # Handle remove subcommand
 if [ "$1" = "remove" ]; then
   if [ -z "$2" ]; then
