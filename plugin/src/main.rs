@@ -62,8 +62,10 @@ pub struct State {
 
 register_plugin!(State);
 
-/// Parse `git worktree list --porcelain` output, returning only worktrees under spawn_prefix.
-pub fn parse_worktrees(output: &str, spawn_prefix: &str) -> Vec<Worktree> {
+/// Parse `git worktree list --porcelain` output, returning only worktrees managed by spawn-agent.
+/// `spawn_suffix` is `/.spawn-agent/<repo_name>/` — matched anywhere in the path to avoid
+/// depending on $HOME which isn't available in the WASM sandbox.
+pub fn parse_worktrees(output: &str, spawn_suffix: &str) -> Vec<Worktree> {
     let mut worktrees = Vec::new();
     let mut current_path = String::new();
 
@@ -71,7 +73,7 @@ pub fn parse_worktrees(output: &str, spawn_prefix: &str) -> Vec<Worktree> {
         if let Some(path) = line.strip_prefix("worktree ") {
             current_path = path.to_string();
         } else if let Some(branch_ref) = line.strip_prefix("branch ") {
-            if current_path.starts_with(spawn_prefix) {
+            if current_path.contains(spawn_suffix) {
                 let branch = branch_ref
                     .strip_prefix("refs/heads/")
                     .unwrap_or(branch_ref)
@@ -428,9 +430,8 @@ impl ZellijPlugin for State {
                 match context.get("cmd_type").map(|s| s.as_str()) {
                     Some(CMD_GIT_TOPLEVEL) => self.handle_git_toplevel(exit_code, &stdout, &stderr),
                     Some(CMD_LIST_WORKTREES) => {
-                        let home = std::env::var("HOME").unwrap_or_default();
-                        let spawn_prefix = format!("{}/.spawn-agent/{}/", home, self.repo_name);
-                        self.handle_list_worktrees(exit_code, &stdout, &spawn_prefix);
+                        let suffix = format!("/.spawn-agent/{}/", self.repo_name);
+                        self.handle_list_worktrees(exit_code, &stdout, &suffix);
                         Action::None
                     }
                     Some(CMD_GIT_BRANCHES) => {
@@ -520,7 +521,7 @@ mod tests {
     // --- Parsing tests ---
 
     #[test]
-    fn parse_worktrees_filters_by_prefix() {
+    fn parse_worktrees_filters_by_suffix() {
         let output = "\
 worktree /Users/me/code/myrepo
 HEAD abc123
@@ -538,8 +539,8 @@ worktree /Users/me/.spawn-agent/other-repo/feature/cool
 HEAD 111222
 branch refs/heads/feature/cool
 ";
-        let prefix = "/Users/me/.spawn-agent/myrepo/";
-        let wts = parse_worktrees(output, prefix);
+        let suffix = "/.spawn-agent/myrepo/";
+        let wts = parse_worktrees(output, suffix);
 
         assert_eq!(wts.len(), 2);
         assert_eq!(wts[0].branch, "feature/cool");
@@ -549,7 +550,7 @@ branch refs/heads/feature/cool
 
     #[test]
     fn parse_worktrees_empty_output() {
-        let wts = parse_worktrees("", "/some/prefix/");
+        let wts = parse_worktrees("", "/.spawn-agent/x/");
         assert!(wts.is_empty());
     }
 
@@ -564,7 +565,7 @@ worktree /Users/me/.spawn-agent/myrepo/dev
 HEAD def456
 bare
 ";
-        let wts = parse_worktrees(output, "/Users/me/.spawn-agent/myrepo/");
+        let wts = parse_worktrees(output, "/.spawn-agent/myrepo/");
         assert!(wts.is_empty());
     }
 
@@ -909,8 +910,8 @@ bare
         let mut s = State::default();
         s.repo_name = "myrepo".into();
         s.selected_index = 5;
-        let output = b"worktree /prefix/myrepo/a\nHEAD abc\nbranch refs/heads/a\n";
-        s.handle_list_worktrees(Some(0), output, "/prefix/myrepo/");
+        let output = b"worktree /home/me/.spawn-agent/myrepo/a\nHEAD abc\nbranch refs/heads/a\n";
+        s.handle_list_worktrees(Some(0), output, "/.spawn-agent/myrepo/");
         assert_eq!(s.selected_index, 0);
     }
 }
