@@ -127,7 +127,7 @@ fi
 
 # Generate temp layout files
 mkdir -p "$HOME/.spawn-agent/tmp"
-LAYOUT=$(mktemp "$HOME/.spawn-agent/tmp/layout-XXXXXX.kdl")
+LAYOUT=$(mktemp "$HOME/.spawn-agent/tmp/layout-XXXXXX")
 trap 'rm -f "$LAYOUT"' EXIT
 
 # Pane content shared by both layouts

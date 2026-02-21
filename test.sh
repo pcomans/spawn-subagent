@@ -62,7 +62,7 @@ cat > "$MOCK_BIN_LAYOUT/zellij" <<'MOCK'
 #!/bin/bash
 echo "zellij $*"
 for arg in "$@"; do
-  if [ -f "$arg" ] && [[ "$arg" == *.kdl ]]; then cat "$arg"; fi
+  if [ -f "$arg" ]; then cat "$arg"; fi
 done
 MOCK
 cat > "$MOCK_BIN_LAYOUT/lazygit" <<'MOCK'
@@ -127,13 +127,13 @@ rm -rf "$NONGIT"
 # ── Launch mode selection ─────────────────────────────────────────────────────
 echo "Launch mode:"
 
-# Mock zellij + lazygit; cats any .kdl file so we can inspect the layout
+# Mock zellij + lazygit; cats any file arg so we can inspect the layout
 MOCK_BIN=$(mktemp -d)
 cat > "$MOCK_BIN/zellij" <<'MOCK'
 #!/bin/bash
 echo "zellij $*"
 for arg in "$@"; do
-  if [ -f "$arg" ] && [[ "$arg" == *.kdl ]]; then cat "$arg"; fi
+  if [ -f "$arg" ]; then cat "$arg"; fi
 done
 MOCK
 cat > "$MOCK_BIN/lazygit" <<'MOCK'
