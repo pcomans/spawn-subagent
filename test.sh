@@ -75,14 +75,16 @@ out=$(ZELLIJ=1 ZELLIJ_SESSION_NAME=fake PATH="$MOCK_BIN_LAYOUT:$PATH" \
   "$SCRIPT" test-layout-branch claude 2>&1)
 # Cleanup worktree/branch created by the script
 git -C "$REPO_ROOT" worktree remove --force \
-  "$HOME/.spawn-agent/$REPO_NAME/test-layout-branch" 2>/dev/null || true
-git -C "$REPO_ROOT" branch -D test-layout-branch 2>/dev/null || true
+  "$HOME/.spawn-agent/$REPO_NAME/test-layout-branch" &>/dev/null || true
+git -C "$REPO_ROOT" branch -D test-layout-branch &>/dev/null || true
 
-contains "layout contains agent command"  'command="claude"'       "$out"
-contains "layout contains lazygit"        'command="lazygit"'      "$out"
-contains "layout contains tab-bar"        'zellij:tab-bar'          "$out"
-contains "layout contains status-bar"     'zellij:status-bar'       "$out"
-excludes "inside zellij layout: no tab{} wrapper" 'tab name='      "$out"
+EXPECTED_CWD="$HOME/.spawn-agent/$REPO_NAME/test-layout-branch"
+contains "layout contains agent command"  'command="claude"'         "$out"
+contains "layout contains worktree cwd"   "cwd=\"$EXPECTED_CWD\""   "$out"
+contains "layout contains lazygit"        'command="lazygit"'        "$out"
+contains "layout contains tab-bar"        'zellij:tab-bar'            "$out"
+contains "layout contains status-bar"     'zellij:status-bar'         "$out"
+excludes "inside zellij layout: no tab{} wrapper" 'tab name='        "$out"
 
 rm -rf "$MOCK_BIN_LAYOUT"
 
@@ -142,8 +144,8 @@ chmod +x "$MOCK_BIN/zellij" "$MOCK_BIN/lazygit"
 # Shared cleanup for worktrees created during launch-mode tests
 cleanup_test_branch() {
   git -C "$REPO_ROOT" worktree remove --force \
-    "$HOME/.spawn-agent/$REPO_NAME/some-branch" 2>/dev/null || true
-  git -C "$REPO_ROOT" branch -D some-branch 2>/dev/null || true
+    "$HOME/.spawn-agent/$REPO_NAME/some-branch" &>/dev/null || true
+  git -C "$REPO_ROOT" branch -D some-branch &>/dev/null || true
 }
 
 # Inside Zellij: new-tab, no tab wrapper in layout
@@ -193,33 +195,30 @@ else
   TEST_SESSION="spawn-agent-test-$$"
   zellij attach --create-background "$TEST_SESSION" 2>/dev/null
 
-  LAYOUT=$(mktemp "${TMPDIR:-/tmp}/spawn-agent-XXXXXX.kdl")
-  cat > "$LAYOUT" <<EOF2
-layout {
-    pane size=1 borderless=true {
-        plugin location="zellij:tab-bar"
-    }
-    pane split_direction="vertical" {
-        pane command="bash" cwd="/tmp" size="70%"
-        pane command="bash" cwd="/tmp" size="30%"
-    }
-    pane size=1 borderless=true {
-        plugin location="zellij:status-bar"
-    }
-}
-EOF2
+  # Mock lazygit so the script can pass the dependency check
+  MOCK_BIN_INT=$(mktemp -d)
+  cat > "$MOCK_BIN_INT/lazygit" <<'MOCK'
+#!/bin/bash
+MOCK
+  chmod +x "$MOCK_BIN_INT/lazygit"
 
-  ZELLIJ_SESSION_NAME="$TEST_SESSION" zellij action new-tab \
-    --layout "$LAYOUT" --name "integration-test" 2>/dev/null
-  code=$?
-  check "new-tab with layout exits 0" "0" "$code"
+  # Call the script in inside-Zellij mode; it will call `zellij action new-tab`
+  # targeting the background test session via ZELLIJ_SESSION_NAME
+  int_out=$(ZELLIJ=1 ZELLIJ_SESSION_NAME="$TEST_SESSION" PATH="$MOCK_BIN_INT:$PATH" \
+    "$SCRIPT" integration-test-branch 2>&1)
+  int_code=$?
+  check "script exits 0 (integration)" "0" "$int_code"
+
+  git -C "$REPO_ROOT" worktree remove --force \
+    "$HOME/.spawn-agent/$REPO_NAME/integration-test-branch" &>/dev/null || true
+  git -C "$REPO_ROOT" branch -D integration-test-branch &>/dev/null || true
+  rm -rf "$MOCK_BIN_INT"
 
   DUMP=$(ZELLIJ_SESSION_NAME="$TEST_SESSION" zellij action dump-layout 2>/dev/null)
-  contains "tab appears in session layout" 'tab name="integration-test"' "$DUMP"
+  contains "tab appears in session layout" 'tab name="integration-test-branch"' "$DUMP"
   contains "tab has tab-bar"    'plugin location="zellij:tab-bar"'    "$DUMP"
   contains "tab has status-bar" 'plugin location="zellij:status-bar"' "$DUMP"
 
-  rm -f "$LAYOUT"
   zellij kill-session "$TEST_SESSION" 2>/dev/null
 fi
 
