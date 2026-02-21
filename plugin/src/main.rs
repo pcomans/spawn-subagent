@@ -26,26 +26,38 @@ impl Default for Mode {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Worktree {
     pub path: String,
     pub branch: String,
 }
 
+/// Actions returned by key/event handlers, executed by the plugin shell.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    None,
+    Close,
+    Spawn(String),
+    Remove(String),
+    Refresh,
+    FetchToplevel,
+    FetchWorktreesAndBranches,
+}
+
 #[derive(Default)]
-struct State {
-    mode: Mode,
-    repo_root: String,
-    repo_name: String,
-    worktrees: Vec<Worktree>,
-    branches: Vec<String>,
-    filtered_branches: Vec<String>,
-    selected_index: usize,
-    input_buffer: String,
-    agent_cmd: String,
-    status_message: String,
-    status_is_error: bool,
-    spawn_agent_path: String,
+pub struct State {
+    pub mode: Mode,
+    pub repo_root: String,
+    pub repo_name: String,
+    pub worktrees: Vec<Worktree>,
+    pub branches: Vec<String>,
+    pub filtered_branches: Vec<String>,
+    pub selected_index: usize,
+    pub input_buffer: String,
+    pub agent_cmd: String,
+    pub status_message: String,
+    pub status_is_error: bool,
+    pub spawn_agent_path: String,
 }
 
 register_plugin!(State);
@@ -84,7 +96,6 @@ pub fn parse_branches(output: &str) -> Vec<String> {
         .collect()
 }
 
-
 impl State {
     fn ctx(cmd_type: &str) -> BTreeMap<String, String> {
         let mut m = BTreeMap::new();
@@ -93,7 +104,12 @@ impl State {
     }
 
     fn fire_git_toplevel(&self) {
-        run_command(&["git", "rev-parse", "--show-toplevel"], Self::ctx(CMD_GIT_TOPLEVEL));
+        // Use --git-common-dir to get the main repo's .git dir even from a worktree.
+        // This ensures repo_name is always the main repo, not a worktree subdirectory.
+        run_command(
+            &["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            Self::ctx(CMD_GIT_TOPLEVEL),
+        );
     }
 
     fn fire_list_worktrees(&self) {
@@ -151,14 +167,39 @@ impl State {
         );
     }
 
-    fn handle_git_toplevel(&mut self, exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) {
+    fn execute(&self, action: &Action) {
+        match action {
+            Action::None => {}
+            Action::Close => close_self(),
+            Action::Spawn(branch) => self.fire_spawn(branch),
+            Action::Remove(branch) => self.fire_remove(branch),
+            Action::Refresh => {
+                self.fire_list_worktrees();
+                self.fire_git_branches();
+            }
+            Action::FetchToplevel => self.fire_git_toplevel(),
+            Action::FetchWorktreesAndBranches => {
+                self.fire_list_worktrees();
+                self.fire_git_branches();
+            }
+        }
+    }
+
+    // --- Pure state handlers (no zellij calls, fully testable) ---
+
+    pub fn handle_git_toplevel(&mut self, exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> Action {
         if exit_code != Some(0) {
             let err = String::from_utf8_lossy(stderr);
             self.status_message = format!("Not a git repo: {err}");
             self.status_is_error = true;
-            return;
+            return Action::None;
         }
-        let root = String::from_utf8_lossy(stdout).trim().to_string();
+        // --git-common-dir returns e.g. "/path/to/repo/.git" — strip the /.git suffix
+        let git_dir = String::from_utf8_lossy(stdout).trim().to_string();
+        let root = git_dir
+            .strip_suffix("/.git")
+            .unwrap_or(&git_dir)
+            .to_string();
         self.repo_name = root
             .rsplit('/')
             .next()
@@ -166,28 +207,23 @@ impl State {
             .to_string();
         self.repo_root = root;
         self.mode = Mode::BrowseWorktrees;
-        self.fire_list_worktrees();
-        self.fire_git_branches();
+        Action::FetchWorktreesAndBranches
     }
 
-    fn handle_list_worktrees(&mut self, _exit_code: Option<i32>, stdout: &[u8]) {
+    pub fn handle_list_worktrees(&mut self, _exit_code: Option<i32>, stdout: &[u8], spawn_prefix: &str) {
         let output = String::from_utf8_lossy(stdout);
-        let home = std::env::var("HOME").unwrap_or_default();
-        let spawn_prefix = format!("{}/.spawn-agent/{}/", home, self.repo_name);
-
-        self.worktrees = parse_worktrees(&output, &spawn_prefix);
+        self.worktrees = parse_worktrees(&output, spawn_prefix);
         if self.selected_index >= self.worktrees.len() && !self.worktrees.is_empty() {
             self.selected_index = self.worktrees.len() - 1;
         }
     }
 
-    fn handle_git_branches(&mut self, _exit_code: Option<i32>, stdout: &[u8]) {
+    pub fn handle_git_branches(&mut self, _exit_code: Option<i32>, stdout: &[u8]) {
         let output = String::from_utf8_lossy(stdout);
         self.branches = parse_branches(&output);
     }
 
-
-    fn handle_spawn_result(&mut self, exit_code: Option<i32>, stderr: &[u8], context: &BTreeMap<String, String>) {
+    pub fn handle_spawn_result(&mut self, exit_code: Option<i32>, stderr: &[u8], context: &BTreeMap<String, String>) -> Action {
         let branch = context.get("branch").cloned().unwrap_or_default();
         if exit_code == Some(0) {
             self.status_message = format!("Spawned '{branch}'");
@@ -197,10 +233,10 @@ impl State {
             self.status_message = format!("Error: {err}");
             self.status_is_error = true;
         }
-        self.fire_list_worktrees();
+        Action::Refresh
     }
 
-    fn handle_remove_result(&mut self, exit_code: Option<i32>, stderr: &[u8], context: &BTreeMap<String, String>) {
+    pub fn handle_remove_result(&mut self, exit_code: Option<i32>, stderr: &[u8], context: &BTreeMap<String, String>) -> Action {
         let branch = context.get("branch").cloned().unwrap_or_default();
         if exit_code == Some(0) {
             self.status_message = format!("Removed '{branch}'");
@@ -211,10 +247,10 @@ impl State {
             self.status_is_error = true;
         }
         self.mode = Mode::BrowseWorktrees;
-        self.fire_list_worktrees();
+        Action::Refresh
     }
 
-    fn handle_key_browse(&mut self, key: &KeyWithModifier) {
+    pub fn handle_key_browse(&mut self, key: &KeyWithModifier) -> Action {
         if key.has_no_modifiers() {
             match key.bare_key {
                 BareKey::Char('j') | BareKey::Down => {
@@ -236,7 +272,7 @@ impl State {
                         let branch = wt.branch.clone();
                         self.status_message = format!("Spawning '{branch}'...");
                         self.status_is_error = false;
-                        self.fire_spawn(&branch);
+                        return Action::Spawn(branch);
                     }
                 }
                 BareKey::Char('n') => {
@@ -254,20 +290,20 @@ impl State {
                     }
                 }
                 BareKey::Char('r') => {
-                    self.fire_list_worktrees();
-                    self.fire_git_branches();
                     self.status_message = "Refreshed".to_string();
                     self.status_is_error = false;
+                    return Action::Refresh;
                 }
                 BareKey::Char('q') | BareKey::Esc => {
-                    close_self();
+                    return Action::Close;
                 }
                 _ => {}
             }
         }
+        Action::None
     }
 
-    fn handle_key_select_branch(&mut self, key: &KeyWithModifier) {
+    pub fn handle_key_select_branch(&mut self, key: &KeyWithModifier) -> Action {
         if key.has_no_modifiers() {
             match key.bare_key {
                 BareKey::Char('j') | BareKey::Down => {
@@ -289,7 +325,7 @@ impl State {
                         self.status_message = format!("Spawning '{branch}'...");
                         self.status_is_error = false;
                         self.mode = Mode::BrowseWorktrees;
-                        self.fire_spawn(&branch);
+                        return Action::Spawn(branch);
                     }
                 }
                 BareKey::Esc => {
@@ -299,9 +335,10 @@ impl State {
                 _ => {}
             }
         }
+        Action::None
     }
 
-    fn handle_key_input_branch(&mut self, key: &KeyWithModifier) {
+    pub fn handle_key_input_branch(&mut self, key: &KeyWithModifier) -> Action {
         let no_mod = key.has_no_modifiers();
         let shift_only = key.key_modifiers.len() == 1
             && key.key_modifiers.contains(&KeyModifier::Shift);
@@ -313,7 +350,7 @@ impl State {
                     self.status_message = format!("Spawning '{branch}'...");
                     self.status_is_error = false;
                     self.mode = Mode::BrowseWorktrees;
-                    self.fire_spawn(&branch);
+                    return Action::Spawn(branch);
                 }
             }
             BareKey::Esc if no_mod => {
@@ -328,9 +365,10 @@ impl State {
             }
             _ => {}
         }
+        Action::None
     }
 
-    fn handle_key_confirming(&mut self, key: &KeyWithModifier) {
+    pub fn handle_key_confirming(&mut self, key: &KeyWithModifier) -> Action {
         if key.has_no_modifiers() {
             match key.bare_key {
                 BareKey::Char('y') => {
@@ -338,7 +376,7 @@ impl State {
                         let branch = wt.branch.clone();
                         self.status_message = format!("Removing '{branch}'...");
                         self.status_is_error = false;
-                        self.fire_remove(&branch);
+                        return Action::Remove(branch);
                     }
                 }
                 BareKey::Char('n') | BareKey::Esc => {
@@ -347,6 +385,7 @@ impl State {
                 _ => {}
             }
         }
+        Action::None
     }
 }
 
@@ -376,39 +415,46 @@ impl ZellijPlugin for State {
     }
 
     fn update(&mut self, event: Event) -> bool {
-        match event {
+        let action = match event {
             Event::PermissionRequestResult(PermissionStatus::Granted) => {
-                self.fire_git_toplevel();
-                true
+                Action::FetchToplevel
             }
             Event::PermissionRequestResult(PermissionStatus::Denied) => {
                 self.status_message = "Permissions denied. Plugin cannot run commands.".to_string();
                 self.status_is_error = true;
-                true
+                Action::None
             }
             Event::RunCommandResult(exit_code, stdout, stderr, context) => {
                 match context.get("cmd_type").map(|s| s.as_str()) {
                     Some(CMD_GIT_TOPLEVEL) => self.handle_git_toplevel(exit_code, &stdout, &stderr),
-                    Some(CMD_LIST_WORKTREES) => self.handle_list_worktrees(exit_code, &stdout),
-                    Some(CMD_GIT_BRANCHES) => self.handle_git_branches(exit_code, &stdout),
+                    Some(CMD_LIST_WORKTREES) => {
+                        let home = std::env::var("HOME").unwrap_or_default();
+                        let spawn_prefix = format!("{}/.spawn-agent/{}/", home, self.repo_name);
+                        self.handle_list_worktrees(exit_code, &stdout, &spawn_prefix);
+                        Action::None
+                    }
+                    Some(CMD_GIT_BRANCHES) => {
+                        self.handle_git_branches(exit_code, &stdout);
+                        Action::None
+                    }
                     Some(CMD_SPAWN) => self.handle_spawn_result(exit_code, &stderr, &context),
                     Some(CMD_REMOVE) => self.handle_remove_result(exit_code, &stderr, &context),
-                    _ => {}
+                    _ => Action::None,
                 }
-                true
             }
             Event::Key(key) => {
                 match self.mode {
-                    Mode::Loading => {}
+                    Mode::Loading => Action::None,
                     Mode::BrowseWorktrees => self.handle_key_browse(&key),
                     Mode::SelectBranch => self.handle_key_select_branch(&key),
                     Mode::InputBranch => self.handle_key_input_branch(&key),
                     Mode::Confirming => self.handle_key_confirming(&key),
                 }
-                true
             }
-            _ => false,
-        }
+            _ => return false,
+        };
+        self.execute(&action);
+        true
     }
 
     fn render(&mut self, rows: usize, cols: usize) {
@@ -447,6 +493,31 @@ impl ZellijPlugin for State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
+    fn key(bare: BareKey) -> KeyWithModifier {
+        KeyWithModifier { bare_key: bare, key_modifiers: BTreeSet::new() }
+    }
+
+    fn key_shift(bare: BareKey) -> KeyWithModifier {
+        let mut mods = BTreeSet::new();
+        mods.insert(KeyModifier::Shift);
+        KeyWithModifier { bare_key: bare, key_modifiers: mods }
+    }
+
+    fn state_with_worktrees() -> State {
+        let mut s = State::default();
+        s.mode = Mode::BrowseWorktrees;
+        s.worktrees = vec![
+            Worktree { path: "/wt/feat-a".into(), branch: "feat-a".into() },
+            Worktree { path: "/wt/feat-b".into(), branch: "feat-b".into() },
+            Worktree { path: "/wt/feat-c".into(), branch: "feat-c".into() },
+        ];
+        s.branches = vec!["main".into(), "feat-a".into(), "feat-b".into(), "dev".into()];
+        s
+    }
+
+    // --- Parsing tests ---
 
     #[test]
     fn parse_worktrees_filters_by_prefix() {
@@ -511,4 +582,335 @@ bare
         assert_eq!(branches, vec!["main", "dev"]);
     }
 
+    // --- BrowseWorktrees key handler tests ---
+
+    #[test]
+    fn browse_j_moves_down() {
+        let mut s = state_with_worktrees();
+        s.handle_key_browse(&key(BareKey::Char('j')));
+        assert_eq!(s.selected_index, 1);
+        s.handle_key_browse(&key(BareKey::Down));
+        assert_eq!(s.selected_index, 2);
+    }
+
+    #[test]
+    fn browse_j_wraps_around() {
+        let mut s = state_with_worktrees();
+        s.selected_index = 2;
+        s.handle_key_browse(&key(BareKey::Char('j')));
+        assert_eq!(s.selected_index, 0);
+    }
+
+    #[test]
+    fn browse_k_moves_up() {
+        let mut s = state_with_worktrees();
+        s.selected_index = 2;
+        s.handle_key_browse(&key(BareKey::Char('k')));
+        assert_eq!(s.selected_index, 1);
+        s.handle_key_browse(&key(BareKey::Up));
+        assert_eq!(s.selected_index, 0);
+    }
+
+    #[test]
+    fn browse_k_wraps_around() {
+        let mut s = state_with_worktrees();
+        s.selected_index = 0;
+        s.handle_key_browse(&key(BareKey::Char('k')));
+        assert_eq!(s.selected_index, 2);
+    }
+
+    #[test]
+    fn browse_jk_noop_on_empty() {
+        let mut s = State { mode: Mode::BrowseWorktrees, ..Default::default() };
+        s.handle_key_browse(&key(BareKey::Char('j')));
+        assert_eq!(s.selected_index, 0);
+        s.handle_key_browse(&key(BareKey::Char('k')));
+        assert_eq!(s.selected_index, 0);
+    }
+
+    #[test]
+    fn browse_enter_spawns_selected() {
+        let mut s = state_with_worktrees();
+        s.selected_index = 1;
+        let action = s.handle_key_browse(&key(BareKey::Enter));
+        assert_eq!(action, Action::Spawn("feat-b".into()));
+        assert_eq!(s.status_message, "Spawning 'feat-b'...");
+    }
+
+    #[test]
+    fn browse_enter_noop_on_empty() {
+        let mut s = State { mode: Mode::BrowseWorktrees, ..Default::default() };
+        let action = s.handle_key_browse(&key(BareKey::Enter));
+        assert_eq!(action, Action::None);
+    }
+
+    #[test]
+    fn browse_n_switches_to_select_branch() {
+        let mut s = state_with_worktrees();
+        s.selected_index = 2;
+        s.handle_key_browse(&key(BareKey::Char('n')));
+        assert_eq!(s.mode, Mode::SelectBranch);
+        assert_eq!(s.selected_index, 0);
+        assert_eq!(s.filtered_branches, s.branches);
+    }
+
+    #[test]
+    fn browse_i_switches_to_input_branch() {
+        let mut s = state_with_worktrees();
+        s.input_buffer = "leftover".into();
+        s.handle_key_browse(&key(BareKey::Char('i')));
+        assert_eq!(s.mode, Mode::InputBranch);
+        assert!(s.input_buffer.is_empty());
+    }
+
+    #[test]
+    fn browse_d_switches_to_confirming() {
+        let mut s = state_with_worktrees();
+        s.handle_key_browse(&key(BareKey::Char('d')));
+        assert_eq!(s.mode, Mode::Confirming);
+    }
+
+    #[test]
+    fn browse_d_noop_on_empty() {
+        let mut s = State { mode: Mode::BrowseWorktrees, ..Default::default() };
+        s.handle_key_browse(&key(BareKey::Char('d')));
+        assert_eq!(s.mode, Mode::BrowseWorktrees);
+    }
+
+    #[test]
+    fn browse_r_returns_refresh() {
+        let mut s = state_with_worktrees();
+        let action = s.handle_key_browse(&key(BareKey::Char('r')));
+        assert_eq!(action, Action::Refresh);
+        assert_eq!(s.status_message, "Refreshed");
+    }
+
+    #[test]
+    fn browse_q_returns_close() {
+        let mut s = state_with_worktrees();
+        assert_eq!(s.handle_key_browse(&key(BareKey::Char('q'))), Action::Close);
+    }
+
+    #[test]
+    fn browse_esc_returns_close() {
+        let mut s = state_with_worktrees();
+        assert_eq!(s.handle_key_browse(&key(BareKey::Esc)), Action::Close);
+    }
+
+    // --- SelectBranch key handler tests ---
+
+    #[test]
+    fn select_branch_jk_navigates() {
+        let mut s = state_with_worktrees();
+        s.mode = Mode::SelectBranch;
+        s.filtered_branches = s.branches.clone();
+        s.selected_index = 0;
+
+        s.handle_key_select_branch(&key(BareKey::Char('j')));
+        assert_eq!(s.selected_index, 1);
+        s.handle_key_select_branch(&key(BareKey::Char('k')));
+        assert_eq!(s.selected_index, 0);
+    }
+
+    #[test]
+    fn select_branch_wraps() {
+        let mut s = state_with_worktrees();
+        s.mode = Mode::SelectBranch;
+        s.filtered_branches = vec!["a".into(), "b".into()];
+        s.selected_index = 1;
+
+        s.handle_key_select_branch(&key(BareKey::Char('j')));
+        assert_eq!(s.selected_index, 0);
+
+        s.handle_key_select_branch(&key(BareKey::Char('k')));
+        assert_eq!(s.selected_index, 1);
+    }
+
+    #[test]
+    fn select_branch_enter_spawns() {
+        let mut s = state_with_worktrees();
+        s.mode = Mode::SelectBranch;
+        s.filtered_branches = vec!["dev".into(), "main".into()];
+        s.selected_index = 0;
+
+        let action = s.handle_key_select_branch(&key(BareKey::Enter));
+        assert_eq!(action, Action::Spawn("dev".into()));
+        assert_eq!(s.mode, Mode::BrowseWorktrees);
+    }
+
+    #[test]
+    fn select_branch_esc_goes_back() {
+        let mut s = state_with_worktrees();
+        s.mode = Mode::SelectBranch;
+        s.selected_index = 2;
+        s.handle_key_select_branch(&key(BareKey::Esc));
+        assert_eq!(s.mode, Mode::BrowseWorktrees);
+        assert_eq!(s.selected_index, 0);
+    }
+
+    // --- InputBranch key handler tests ---
+
+    #[test]
+    fn input_branch_typing() {
+        let mut s = State { mode: Mode::InputBranch, ..Default::default() };
+        s.handle_key_input_branch(&key(BareKey::Char('f')));
+        s.handle_key_input_branch(&key(BareKey::Char('o')));
+        s.handle_key_input_branch(&key(BareKey::Char('o')));
+        assert_eq!(s.input_buffer, "foo");
+    }
+
+    #[test]
+    fn input_branch_shift_chars() {
+        let mut s = State { mode: Mode::InputBranch, ..Default::default() };
+        s.handle_key_input_branch(&key_shift(BareKey::Char('F')));
+        assert_eq!(s.input_buffer, "F");
+    }
+
+    #[test]
+    fn input_branch_backspace() {
+        let mut s = State { mode: Mode::InputBranch, input_buffer: "ab".into(), ..Default::default() };
+        s.handle_key_input_branch(&key(BareKey::Backspace));
+        assert_eq!(s.input_buffer, "a");
+    }
+
+    #[test]
+    fn input_branch_enter_spawns() {
+        let mut s = State { mode: Mode::InputBranch, input_buffer: "feat/new".into(), ..Default::default() };
+        let action = s.handle_key_input_branch(&key(BareKey::Enter));
+        assert_eq!(action, Action::Spawn("feat/new".into()));
+        assert_eq!(s.mode, Mode::BrowseWorktrees);
+    }
+
+    #[test]
+    fn input_branch_enter_noop_on_empty() {
+        let mut s = State { mode: Mode::InputBranch, input_buffer: "  ".into(), ..Default::default() };
+        let action = s.handle_key_input_branch(&key(BareKey::Enter));
+        assert_eq!(action, Action::None);
+        assert_eq!(s.mode, Mode::InputBranch);
+    }
+
+    #[test]
+    fn input_branch_esc_goes_back() {
+        let mut s = State { mode: Mode::InputBranch, input_buffer: "wip".into(), ..Default::default() };
+        s.handle_key_input_branch(&key(BareKey::Esc));
+        assert_eq!(s.mode, Mode::BrowseWorktrees);
+    }
+
+    // --- Confirming key handler tests ---
+
+    #[test]
+    fn confirm_y_removes() {
+        let mut s = state_with_worktrees();
+        s.mode = Mode::Confirming;
+        s.selected_index = 1;
+        let action = s.handle_key_confirming(&key(BareKey::Char('y')));
+        assert_eq!(action, Action::Remove("feat-b".into()));
+        assert_eq!(s.status_message, "Removing 'feat-b'...");
+    }
+
+    #[test]
+    fn confirm_n_cancels() {
+        let mut s = state_with_worktrees();
+        s.mode = Mode::Confirming;
+        s.handle_key_confirming(&key(BareKey::Char('n')));
+        assert_eq!(s.mode, Mode::BrowseWorktrees);
+    }
+
+    #[test]
+    fn confirm_esc_cancels() {
+        let mut s = state_with_worktrees();
+        s.mode = Mode::Confirming;
+        s.handle_key_confirming(&key(BareKey::Esc));
+        assert_eq!(s.mode, Mode::BrowseWorktrees);
+    }
+
+    // --- Command result handler tests ---
+
+    #[test]
+    fn git_toplevel_sets_repo() {
+        let mut s = State::default();
+        // --git-common-dir returns the .git directory
+        let action = s.handle_git_toplevel(Some(0), b"/home/user/myrepo/.git\n", b"");
+        assert_eq!(s.repo_root, "/home/user/myrepo");
+        assert_eq!(s.repo_name, "myrepo");
+        assert_eq!(s.mode, Mode::BrowseWorktrees);
+        assert_eq!(action, Action::FetchWorktreesAndBranches);
+    }
+
+    #[test]
+    fn git_toplevel_from_worktree() {
+        let mut s = State::default();
+        // Even when launched from a worktree, --git-common-dir points to the main repo
+        let action = s.handle_git_toplevel(Some(0), b"/home/user/myrepo/.git\n", b"");
+        assert_eq!(s.repo_root, "/home/user/myrepo");
+        assert_eq!(s.repo_name, "myrepo");
+        assert_eq!(action, Action::FetchWorktreesAndBranches);
+    }
+
+    #[test]
+    fn git_toplevel_error() {
+        let mut s = State::default();
+        let action = s.handle_git_toplevel(Some(128), b"", b"not a git repo");
+        assert!(s.status_is_error);
+        assert!(s.status_message.contains("not a git repo"));
+        assert_eq!(s.mode, Mode::Loading);
+        assert_eq!(action, Action::None);
+    }
+
+    #[test]
+    fn spawn_result_success() {
+        let mut s = state_with_worktrees();
+        let mut ctx = BTreeMap::new();
+        ctx.insert("branch".into(), "feat-a".into());
+        let action = s.handle_spawn_result(Some(0), b"", &ctx);
+        assert_eq!(s.status_message, "Spawned 'feat-a'");
+        assert!(!s.status_is_error);
+        assert_eq!(action, Action::Refresh);
+    }
+
+    #[test]
+    fn spawn_result_error() {
+        let mut s = state_with_worktrees();
+        let mut ctx = BTreeMap::new();
+        ctx.insert("branch".into(), "bad".into());
+        let action = s.handle_spawn_result(Some(1), b"something broke", &ctx);
+        assert!(s.status_is_error);
+        assert!(s.status_message.contains("something broke"));
+        assert_eq!(action, Action::Refresh);
+    }
+
+    #[test]
+    fn remove_result_success() {
+        let mut s = state_with_worktrees();
+        s.mode = Mode::Confirming;
+        let mut ctx = BTreeMap::new();
+        ctx.insert("branch".into(), "feat-a".into());
+        let action = s.handle_remove_result(Some(0), b"", &ctx);
+        assert_eq!(s.status_message, "Removed 'feat-a'");
+        assert_eq!(s.mode, Mode::BrowseWorktrees);
+        assert_eq!(action, Action::Refresh);
+    }
+
+    #[test]
+    fn remove_result_error() {
+        let mut s = state_with_worktrees();
+        s.mode = Mode::Confirming;
+        let mut ctx = BTreeMap::new();
+        ctx.insert("branch".into(), "feat-a".into());
+        let action = s.handle_remove_result(Some(1), b"uncommitted changes", &ctx);
+        assert!(s.status_is_error);
+        assert!(s.status_message.contains("uncommitted changes"));
+        assert_eq!(s.mode, Mode::BrowseWorktrees);
+        assert_eq!(action, Action::Refresh);
+    }
+
+    #[test]
+    fn list_worktrees_clamps_selected_index() {
+        let mut s = State::default();
+        s.repo_name = "myrepo".into();
+        s.selected_index = 5;
+        let output = b"worktree /prefix/myrepo/a\nHEAD abc\nbranch refs/heads/a\n";
+        s.handle_list_worktrees(Some(0), output, "/prefix/myrepo/");
+        assert_eq!(s.selected_index, 0);
+    }
 }
